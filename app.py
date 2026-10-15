@@ -136,7 +136,7 @@ def get_user_id(username, headers):
 
 
 def get_recent_clips(broadcaster_id, headers):
-  """Запрос клипов за последние 7 дней, чтобы свежие клипы не тонули в старых вирусных"""
+  """Загружает ВСЕ клипы за последние 7 дней с пагинацией (в реальном времени)"""
   url = "https://api.twitch.tv/helix/clips"
   started_at = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
@@ -147,19 +147,22 @@ def get_recent_clips(broadcaster_id, headers):
   }
 
   clips_data = []
-  res = requests.get(url, headers=headers, params=params)
-  if res.status_code == 200:
-    clips_data = res.json().get("data", [])
+  while True:
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code != 200:
+      break
+    data = res.json()
+    fetched = data.get("data", [])
+    if not fetched:
+      break
+    clips_data.extend(fetched)
 
-  # Если за последние 7 дней клипов мало, подтягиваем общие за последнее время
-  if len(clips_data) < 10:
-    params_fallback = {"broadcaster_id": broadcaster_id, "first": 50}
-    res_fb = requests.get(url, headers=headers, params=params_fallback)
-    if res_fb.status_code == 200:
-      existing_ids = {c["id"] for c in clips_data}
-      for c in res_fb.json().get("data", []):
-        if c["id"] not in existing_ids:
-          clips_data.append(c)
+    # Пагинация: если есть еще клипы за этот период, подтягиваем следующую страницу
+    cursor = data.get("pagination", {}).get("cursor")
+    if cursor and len(clips_data) < 500:
+      params["after"] = cursor
+    else:
+      break
 
   return clips_data
 
@@ -178,7 +181,6 @@ with st.sidebar:
     except:
       pass
 
-  # Поле ввода с сохранением состояния подсказок
   search_query = st.text_input(
       "Добавить стримера", placeholder="Введите ник...", label_visibility="collapsed"
   )
@@ -224,12 +226,14 @@ with st.sidebar:
   sort_option = st.selectbox(
       "Сортировка", ["Сначала свежие", "По просмотрам"]
   )
-  auto_refresh = st.checkbox("Автообновление (5 мин)", value=True)
+  
+  # Автообновление каждые 60 секунд (реальное время)
+  auto_refresh = st.checkbox("Режим реального времени (1 мин)", value=True)
 
 if auto_refresh:
-  st_autorefresh(interval=300000, key="clips_refresh")
+  st_autorefresh(interval=60000, key="clips_refresh")
 
-# --- ГЛАВНЫЙ ЭКРАН И АВТОМАТИЧЕСКИЙ ПОИСК КЛИПОВ ---
+# --- ГЛАВНЫЙ ЭКРАН ---
 st.title("🟣 Twitch Clips Hub")
 
 streamers = cfg.get("streamers", [])
@@ -263,7 +267,7 @@ else:
               "thumb": thumb,
           })
 
-    # Принудительная сортировка (новые сверху или по просмотрам)
+    # Сортировка
     if sort_option == "Сначала свежие":
       all_clips.sort(key=lambda x: x["date"], reverse=True)
     else:
@@ -301,7 +305,7 @@ else:
           )
           st.write("")
     else:
-      st.warning("Клипы не найдены для выбранных каналов.")
+      st.warning("Клипы не найдены для выбранных каналов за последние 7 дней.")
 
   except Exception as e:
     st.error(f"Ошибка загрузки: {e}")
