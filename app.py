@@ -147,7 +147,7 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
       started_at = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
       params = {
           "broadcaster_id": b_id,
-          "first": 50,
+          "first": 30,
           "started_at": started_at,
       }
       res = requests.get(url, headers=headers, params=params)
@@ -159,7 +159,7 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
               .replace("{height}", "270")
           )
           all_clips.append({
-              "streamer": username,
+              "streamer": clip.get("broadcaster_name", username),
               "title": clip.get("title"),
               "views": clip.get("view_count"),
               "date": clip.get("created_at"),
@@ -172,38 +172,45 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
 
 @st.cache_data(ttl=60)
 def fetch_global_trending_clips(client_id, client_secret):
-  """Загружает популярные/рекомендованные клипы со всего Twitch (без ошибок параметров)"""
+  """Загружает трендовые клипы со всего Twitch через поиск популярных игр"""
   token = get_twitch_token(client_id, client_secret)
   headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
-  
-  # Используем популярные игры или топ стримеров для глобальных рекомендаций, либо запрашиваем общие тренды
-  # Чтобы получить много просмотров, отсортируем по дате за последние 2 дня
-  url = "https://api.twitch.tv/helix/clips"
-  started_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-  params = {"first": 30, "started_at": started_at}
-  
-  res = requests.get(url, headers=headers, params=params)
+
   clips = []
-  if res.status_code == 200:
-    data = res.json().get("data", [])
-    # Сортируем полученные глобальные клипы по просмотрам, чтобы в рекомендациях были самые популярные
-    data.sort(key=lambda x: x.get("view_count", 0), reverse=True)
-    
-    for clip in data:
-      thumb = (
-          clip.get("thumbnail_url", "")
-          .replace("{width}", "480")
-          .replace("{height}", "270")
-      )
-      clips.append({
-          "streamer": clip.get("broadcaster_name"),
-          "title": clip.get("title"),
-          "views": clip.get("view_count"),
-          "date": clip.get("created_at"),
-          "creator": clip.get("creator_name"),
-          "url": clip.get("url"),
-          "thumb": thumb,
-      })
+  try:
+    # 1. Получаем топ-3 игры на Twitch прямо сейчас
+    top_games_url = "https://api.twitch.tv/helix/games/top?first=3"
+    games_res = requests.get(top_games_url, headers=headers)
+    if games_res.status_code == 200:
+      game_ids = [g["id"] for g in games_res.json().get("data", [])]
+
+      # 2. Запрашиваем клипы для этих популярных игр за последние 2 дня
+      started_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+      for g_id in game_ids:
+        clips_url = "https://api.twitch.tv/helix/clips"
+        params = {"game_id": g_id, "first": 15, "started_at": started_at}
+        res = requests.get(clips_url, headers=headers, params=params)
+        if res.status_code == 200:
+          for clip in res.json().get("data", []):
+            thumb = (
+                clip.get("thumbnail_url", "")
+                .replace("{width}", "480")
+                .replace("{height}", "270")
+            )
+            clips.append({
+                "streamer": clip.get("broadcaster_name"),
+                "title": clip.get("title"),
+                "views": clip.get("view_count"),
+                "date": clip.get("created_at"),
+                "creator": clip.get("creator_name"),
+                "url": clip.get("url"),
+                "thumb": thumb,
+            })
+  except Exception:
+    pass
+
+  # Сортируем собранные клипы по просмотрам
+  clips.sort(key=lambda x: x["views"], reverse=True)
   return clips
 
 
