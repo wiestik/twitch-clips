@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="Twitch Clips Hub", page_icon="🟣", layout="wide"
 )
 
-# --- СТИЛЬНЫЙ И МИНИМАЛИСТИЧНЫЙ ДИЗАЙН ---
+# --- МИНИМАЛИСТИЧНЫЙ ДИЗАЙН БЕЗ ФИОЛЕТОВОЙ ПОДСВЕТКИ ---
 st.markdown(
     """
     <style>
@@ -25,7 +25,7 @@ st.markdown(
         padding-top: 1rem;
     }
     
-    /* Стилизация вкладок (Tabs) */
+    /* Стилизация вкладок (убрана яркая фиолетовая подсветка) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         background-color: #121214;
@@ -39,7 +39,7 @@ st.markdown(
         height: 36px;
         background-color: transparent;
         border-radius: 6px;
-        color: #adadb8;
+        color: #848494;
         font-weight: 500;
         font-size: 0.9rem;
         border: none;
@@ -47,8 +47,9 @@ st.markdown(
     }
     
     .stTabs [aria-selected="true"] {
-        background-color: #9146ff !important;
-        color: white !important;
+        background-color: #27272a !important;
+        color: #ffffff !important;
+        border-bottom: 2px solid #9146ff !important;
     }
 
     /* Карточка клипа */
@@ -58,21 +59,9 @@ st.markdown(
         border-radius: 10px;
         padding: 12px;
         margin-bottom: 14px;
-        transition: transform 0.2s ease, border-color 0.2s ease;
         display: flex;
         flex-direction: column;
         height: 100%;
-    }
-    
-    .clip-card:hover {
-        transform: translateY(-3px);
-        border-color: #9146ff;
-    }
-
-    .clip-card img {
-        border-radius: 6px;
-        width: 100%;
-        object-fit: cover;
     }
 
     .clip-tag {
@@ -86,7 +75,6 @@ st.markdown(
         margin-right: 4px;
     }
     
-    /* Компактные и стильные селекты */
     div[data-baseweb="select"] > div {
         background-color: #18181b !important;
         border-color: #27272a !important;
@@ -132,6 +120,10 @@ try:
 except Exception:
   CLIENT_ID = ""
   CLIENT_SECRET = ""
+
+# Получаем базовый URL хоста для встроенного плеера Twitch
+parent_domain = "localhost"
+
 
 # --- TWITCH API ФУНКЦИИ ---
 
@@ -200,26 +192,22 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
       res = requests.get(url, headers=headers, params=params)
       if res.status_code == 200:
         for clip in res.json().get("data", []):
-          thumb = (
-              clip.get("thumbnail_url", "")
-              .replace("{width}", "480")
-              .replace("{height}", "270")
-          )
+          # Извлекаем уникальный slug клипа для встроенного плеера
+          clip_slug = clip.get("id")
           all_clips.append({
+              "id": clip_slug,
               "streamer": clip.get("broadcaster_name", username),
               "title": clip.get("title"),
               "views": clip.get("view_count"),
               "date": clip.get("created_at"),
               "creator": clip.get("creator_name"),
               "url": clip.get("url"),
-              "thumb": thumb,
           })
   return all_clips
 
 
 @st.cache_data(ttl=60)
-def fetch_global_trending_clips(client_id, client_secret, game_id=None, lang_code=None):
-  """Загружает трендовые клипы с возможностью фильтрации по игре и языку на уровне API"""
+def fetch_global_trending_clips(client_id, client_secret, game_id=None):
   token = get_twitch_token(client_id, client_secret)
   headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
 
@@ -228,65 +216,34 @@ def fetch_global_trending_clips(client_id, client_secret, game_id=None, lang_cod
     started_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
     clips_url = "https://api.twitch.tv/helix/clips"
     
-    # Формируем параметры запроса
-    params = {"first": 40, "started_at": started_at}
     if game_id:
-      params["game_id"] = game_id
-
-    if game_id:
+      params = {"game_id": game_id, "first": 30, "started_at": started_at}
       res = requests.get(clips_url, headers=headers, params=params)
       if res.status_code == 200:
         clips.extend(res.json().get("data", []))
     else:
-      # Берем топ-3 игры для генерации рекомендаций
       top_games_url = "https://api.twitch.tv/helix/games/top?first=3"
       games_res = requests.get(top_games_url, headers=headers)
       if games_res.status_code == 200:
         game_ids = [g["id"] for g in games_res.json().get("data", [])]
         for g_id in game_ids:
-          p = {"game_id": g_id, "first": 20, "started_at": started_at}
+          p = {"game_id": g_id, "first": 15, "started_at": started_at}
           res = requests.get(clips_url, headers=headers, params=p)
           if res.status_code == 200:
             clips.extend(res.json().get("data", []))
-
-    # Если выбран язык, собираем ID каналов и проверяем их через эндпоинт users, где язык трансляции (broadcaster_language) доступен всегда
-    if lang_code and clips:
-      b_ids = list(set([str(c["broadcaster_id"]) for c in clips if "broadcaster_id" in c]))
-      lang_map = {}
-      for i in range(0, len(b_ids), 100):
-        chunk = b_ids[i:i+100]
-        users_url = "https://api.twitch.tv/helix/users?" + "&".join([f"id={uid}" for uid in chunk])
-        u_res = requests.get(users_url, headers=headers)
-        if u_res.status_code == 200:
-          for user in u_res.json().get("data", []):
-            lang_map[str(user["id"])] = user.get("broadcaster_language", "")
-
-      # Фильтруем клипы по языку
-      filtered_clips = []
-      for clip in clips:
-        b_id = str(clip.get("broadcaster_id"))
-        if lang_map.get(b_id) == lang_code:
-          filtered_clips.append(clip)
-      clips = filtered_clips
-
   except Exception:
     pass
 
   formatted_clips = []
   for clip in clips:
-    thumb = (
-        clip.get("thumbnail_url", "")
-        .replace("{width}", "480")
-        .replace("{height}", "270")
-    )
     formatted_clips.append({
+        "id": clip.get("id"),
         "streamer": clip.get("broadcaster_name"),
         "title": clip.get("title"),
         "views": clip.get("view_count"),
         "date": clip.get("created_at"),
         "creator": clip.get("creator_name"),
         "url": clip.get("url"),
-        "thumb": thumb,
     })
   
   formatted_clips.sort(key=lambda x: x["views"], reverse=True)
@@ -358,12 +315,20 @@ else:
       if not streamers:
         st.info("👈 Добавьте хотя бы одного стримера в боковой панели.")
       else:
+        # Строка поиска по ключевым словам
+        search_keyword = st.text_input("🔍 Поиск клипа (по названию или стримеру):", key="search_subs")
+
         all_clips = fetch_clips_data(tuple(streamers), CLIENT_ID, CLIENT_SECRET)
 
         if sort_option == "Сначала свежие":
           all_clips.sort(key=lambda x: x["date"], reverse=True)
         else:
           all_clips.sort(key=lambda x: x["views"], reverse=True)
+
+        # Фильтрация по ключевому слову
+        if search_keyword:
+          kw = search_keyword.lower()
+          all_clips = [c for c in all_clips if kw in c["title"].lower() or kw in c["streamer"].lower() or kw in c["creator"].lower()]
 
         if all_clips:
           cols_per_row = 3
@@ -374,11 +339,15 @@ else:
               date_formatted = (
                   clip["date"].replace("T", " ")[:16] if clip["date"] else ""
               )
+              
+              # Встроенный плеер Twitch (iframe)
+              embed_url = f"https://clips.twitch.tv/embed?clip={clip['id']}&parent={parent_domain}&autoplay=false"
+              
               st.markdown(
                   f"""
                     <div class="clip-card">
-                        <img src="{clip['thumb']}">
-                        <h3 style="font-size: 1rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff;">{clip['title']}</h3>
+                        <iframe src="{embed_url}" height="200" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                        <h3 style="font-size: 0.95rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{clip['title']}">{clip['title']}</h3>
                         <div>
                             <span class="clip-tag">📺 {clip['streamer']}</span>
                         </div>
@@ -389,37 +358,30 @@ else:
                   unsafe_allow_html=True,
               )
               st.link_button(
-                  "▶ Смотреть на Twitch", clip["url"], use_container_width=True
+                  "▶ Открыть на Twitch", clip["url"], use_container_width=True
               )
               st.write("")
         else:
-          st.warning("Клипы не найдены для выбранных каналов за последние дни.")
+          st.warning("Клипы не найдены.")
 
-    # --- Вкладка 2: Рекомендации со всего Twitch (компактные селекты в ряд) ---
+    # --- Вкладка 2: Рекомендации со всего Twitch ---
     with tab_trending:
       games_map = fetch_top_games(CLIENT_ID, CLIENT_SECRET)
       game_names = ["Все игры"] + sorted(list(games_map.keys()))
 
-      # Компактные фильтры в одну строку
       f_col1, f_col2 = st.columns([1, 1])
       with f_col1:
         selected_game_name = st.selectbox("🎮 Категория", game_names, label_visibility="collapsed")
       with f_col2:
-        lang_options = {
-            "Все языки": None,
-            "🇷🇺 Русский": "ru",
-            "🇺🇦 Украинский": "uk",
-            "🇺🇸 Английский": "en",
-            "🇩🇪 Немецкий": "de",
-            "🇫🇷 Французский": "fr",
-            "🇪🇸 Испанский": "es"
-        }
-        selected_lang_label = st.selectbox("🌍 Язык", list(lang_options.keys()), label_visibility="collapsed")
-        target_lang_code = lang_options[selected_lang_label]
+        search_keyword_trend = st.text_input("🔍 Поиск по ключевым словам", placeholder="Название клипа...", label_visibility="collapsed")
 
       selected_game_id = games_map.get(selected_game_name) if selected_game_name != "Все игры" else None
 
-      trending_clips = fetch_global_trending_clips(CLIENT_ID, CLIENT_SECRET, game_id=selected_game_id, lang_code=target_lang_code)
+      trending_clips = fetch_global_trending_clips(CLIENT_ID, CLIENT_SECRET, game_id=selected_game_id)
+
+      if search_keyword_trend:
+        kw = search_keyword_trend.lower()
+        trending_clips = [c for c in trending_clips if kw in c["title"].lower() or kw in c["streamer"].lower() or kw in c["creator"].lower()]
 
       if trending_clips:
         t_cols_per_row = 3
@@ -430,11 +392,13 @@ else:
             date_formatted = (
                 clip["date"].replace("T", " ")[:16] if clip["date"] else ""
             )
+            embed_url = f"https://clips.twitch.tv/embed?clip={clip['id']}&parent={parent_domain}&autoplay=false"
+            
             st.markdown(
                 f"""
                   <div class="clip-card">
-                      <img src="{clip['thumb']}">
-                      <h3 style="font-size: 1rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff;">{clip['title']}</h3>
+                      <iframe src="{embed_url}" height="200" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                      <h3 style="font-size: 0.95rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{clip['title']}">{clip['title']}</h3>
                       <div>
                           <span class="clip-tag">📺 {clip['streamer']}</span>
                       </div>
@@ -445,11 +409,11 @@ else:
                 unsafe_allow_html=True,
             )
             st.link_button(
-                "▶ Смотреть на Twitch", clip["url"], use_container_width=True
+                "▶ Открыть на Twitch", clip["url"], use_container_width=True
             )
             st.write("")
       else:
-        st.warning("По вашему фильтру клипы не найдены. Попробуйте изменить категорию или язык.")
+        st.warning("Клипы не найдены.")
 
   except Exception as e:
     st.error(f"Ошибка загрузки: {e}")
