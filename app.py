@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="Twitch Clips Hub", page_icon="🟣", layout="wide"
 )
 
-# --- КАСТОМНЫЕ CSS-СТИЛИ (Единая карточка с hover и кнопками) ---
+# --- КАСТОМНЫЕ CSS-СТИЛИ ---
 st.markdown(
     """
     <style>
@@ -29,14 +29,13 @@ st.markdown(
         border: 1px solid #27272a;
         border-radius: 12px;
         padding: 14px;
-        margin-bottom: 20px;
+        margin-bottom: 12px;
         transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
         display: flex;
         flex-direction: column;
         height: 100%;
     }
     
-    /* Подсветка всей карточки целиком при наведении */
     .clip-card:hover {
         transform: translateY(-4px);
         border-color: #9146ff;
@@ -92,8 +91,7 @@ cfg = st.session_state["config"]
 if "streamers" not in cfg or not isinstance(cfg["streamers"], list):
   cfg["streamers"] = ["dangerlyoha"]
 
-# Получаем Client ID и Secret из защищенных секретов Streamlit (st.secrets)
-# Это убирает необходимость вводить их вручную на экране!
+# Получаем секреты из Streamlit Secrets
 try:
   CLIENT_ID = st.secrets["TWITCH_CLIENT_ID"]
   CLIENT_SECRET = st.secrets["TWITCH_CLIENT_SECRET"]
@@ -131,7 +129,7 @@ with st.sidebar:
       "Сортировка",
       [
           "По просмотрам (убывание)",
-          "По просмотрам (возрастание)",
+          "Por просмотрам (возрастание)",
           "Сначала свежие",
           "Сначала старые",
       ],
@@ -168,7 +166,6 @@ def get_user_id(username, headers):
 
 @st.cache_data(ttl=3600)
 def fetch_games_data(cid, token):
-  """Возвращает словари для конвертации ID игр в названия и наоборот"""
   try:
     headers = {"Client-ID": cid, "Authorization": f"Bearer {token}"}
     url = "https://api.twitch.tv/helix/games/top?first=100"
@@ -209,7 +206,7 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
 # --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
 st.title("🟣 Twitch Clips Hub")
 st.caption(
-    "Галерея клипов с автоматической авторизацией, фильтрацией и скачиванием"
+    "Галерея клипов с автоматической авторизацией, фильтрацией и загрузкой видео"
 )
 
 streamers = cfg.get("streamers", [])
@@ -217,8 +214,7 @@ streamers = cfg.get("streamers", [])
 if not CLIENT_ID or not CLIENT_SECRET:
   st.error(
       "⚠️ Не найдены ключи `TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET` в"
-      " секретах Streamlit! Добавьте их в настройках деплоя (Advanced"
-      " settings -> Secrets)."
+      " секретах Streamlit!"
   )
 else:
   try:
@@ -243,13 +239,18 @@ else:
             b_id = get_user_id(username, headers)
             clips = get_all_clips(b_id, headers, game_id=selected_game_id)
             for clip in clips:
-              thumb = (
-                  clip.get("thumbnail_url")
-                  .replace("{width}", "480")
-                  .replace("{height}", "270")
+              thumb_url = clip.get("thumbnail_url", "")
+              # Превращаем ссылку превью в прямую ссылку на .mp4 видеофайл клипа
+              # Пример превью: https://clips-media-assets2.twitch.tv/...-preview-480x270.jpg
+              if "-preview-" in thumb_url:
+                video_url = thumb_url.split("-preview-")[0] + ".mp4"
+              else:
+                video_url = clip.get("url")
+
+              thumb = thumb_url.replace("{width}", "480").replace(
+                  "{height}", "270"
               )
 
-              # Точное определение категории (если game_name пустое, ищем по game_id)
               g_id = clip.get("game_id")
               g_name = clip.get("game_name")
               if not g_name or g_name.strip() == "":
@@ -263,6 +264,7 @@ else:
                   "game": g_name,
                   "creator": clip.get("creator_name"),
                   "url": clip.get("url"),
+                  "video_url": video_url,
                   "thumb": thumb,
               })
           except Exception as e:
@@ -296,7 +298,6 @@ if "clips" in st.session_state and st.session_state["clips"]:
     with col:
       date_formatted = clip["date"][:10] if clip["date"] else ""
 
-      # Карточка клипа с инкапсулированными элементами внутри единого HTML-блока
       st.markdown(
           f"""
             <div class="clip-card">
@@ -307,21 +308,20 @@ if "clips" in st.session_state and st.session_state["clips"]:
                     <span class="clip-tag">📺 {clip['streamer']}</span>
                 </div>
                 <small style="color: #adadb8; display: block; margin-top: 6px;">👀 {clip['views']:,} просмотров • 📅 {date_formatted}</small>
-                <small style="color: #adadb8; margin-bottom: 10px;">Автор: {clip['creator']}</small>
+                <small style="color: #adadb8; margin-bottom: 8px;">Автор: {clip['creator']}</small>
             </div>
             """,
           unsafe_allow_html=True,
       )
 
-      # Кнопки управления под карточкой в связке
-      b_col1, b_col2 = st.columns(2)
+      # Компактные кнопки в одну линию (Смотреть / Скачать видео)
+      b_col1, b_col2 = st.columns([1, 1])
       with b_col1:
         st.link_button(
             "▶ Смотреть", clip["url"], use_container_width=True
         )
       with b_col2:
-        # Прямая ссылка на скачивание превью в высоком разрешении
         st.link_button(
-            "📥 Скачать", clip["thumb"], use_container_width=True
+            "📥 Скачать", clip["video_url"], use_container_width=True
         )
       st.write("")
