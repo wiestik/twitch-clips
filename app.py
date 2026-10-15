@@ -123,13 +123,15 @@ with st.sidebar:
 
   st.divider()
   auto_refresh = st.checkbox("🔄 Автообновление (каждые 5 мин)", value=True)
+  
+  # По умолчанию ставим "Сначала свежие", чтобы новые клипы всегда были первыми
   sort_option = st.selectbox(
       "Сортировка",
       [
-          "По просмотрам (убывание)",
-          "По просмотрам (возрастание)",
           "Сначала свежие",
           "Сначала старые",
+          "По просмотрам (убывание)",
+          "По просмотрам (возрастание)",
       ],
   )
 
@@ -178,24 +180,9 @@ def fetch_games_data(cid, token):
   return {}, {}
 
 
-from datetime import datetime, timedelta, timezone
-
-# Заменяем функцию get_all_clips на эту версию:
-
-
-def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=500):
+def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=1000):
   url = "https://api.twitch.tv/helix/clips"
-
-  # Берем клипы за последние 30 дней, чтобы свежие точно попадали в выдачу API
-  started_at = (
-      datetime.now(timezone.utc) - timedelta(days=30)
-  ).isoformat()
-
-  params = {
-      "broadcaster_id": broadcaster_id,
-      "first": 100,
-      "started_at": started_at,  # Принудительно запрашиваем свежие за месяц
-  }
+  params = {"broadcaster_id": broadcaster_id, "first": 100}
   if game_id:
     params["game_id"] = game_id
 
@@ -217,11 +204,10 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=500):
       break
   return clips_data
 
+
 # --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
-st.title("🟣 Twitch clips")
-st.caption(
-    "Удобный поиск клипов с Twitch"
-)
+st.title("🟣 Twitch Clips Hub")
+st.caption("Галерея клипов с выводом самых свежих материалов наверх")
 
 streamers = cfg.get("streamers", [])
 
@@ -235,34 +221,13 @@ else:
     token = get_twitch_token(CLIENT_ID, CLIENT_SECRET)
     id_to_name, name_to_id = fetch_games_data(CLIENT_ID, token)
 
-    # Панель фильтров (Категория + Фильтр по дате)
-    f_col1, f_col2 = st.columns([2, 2])
-
-    with f_col1:
-      game_options = ["Все категории"] + sorted(list(name_to_id.keys()))
-      selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
-      selected_game_id = (
-          name_to_id.get(selected_game)
-          if selected_game != "Все категории"
-          else None
-      )
-
-    with f_col2:
-      # Фильтр по периоду дат
-      date_filter_mode = st.selectbox(
-          "📅 Фильтр по дате:",
-          ["За всё время", "За конкретную дату", "За диапазон дат"],
-      )
-
-    target_date = None
-    date_range = None
-
-    if date_filter_mode == "За конкретную дату":
-      target_date = st.date_input("Выберите дату:")
-    elif date_filter_mode == "За диапазон дат":
-      date_range = st.date_input(
-          "Выберите диапазон (Начало и Конец):", []
-      )
+    game_options = ["Все категории"] + sorted(list(name_to_id.keys()))
+    selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
+    selected_game_id = (
+        name_to_id.get(selected_game)
+        if selected_game != "Все категории"
+        else None
+    )
 
     if st.button("🚀 Загрузить клипы", type="primary"):
       with st.spinner("Загрузка всех клипов из Twitch..."):
@@ -289,30 +254,6 @@ else:
               if not g_name or g_name.strip() == "":
                 g_name = id_to_name.get(g_id, "Без категории")
 
-              clip_date_str = clip.get("created_at", "")[:10]  # ГГГГ-ММ-ДД
-              clip_date_obj = (
-                  datetime.strptime(clip_date_str, "%Y-%m-%d").date()
-                  if clip_date_str
-                  else None
-              )
-
-              # Фильтрация по дате «на лету»
-              if clip_date_obj:
-                if (
-                    date_filter_mode == "За конкретную дату"
-                    and target_date
-                    and clip_date_obj != target_date
-                ):
-                  continue
-                if (
-                    date_filter_mode == "За диапазон дат"
-                    and isinstance(date_range, tuple)
-                    and len(date_range) == 2
-                ):
-                  start_d, end_d = date_range
-                  if not (start_d <= clip_date_obj <= end_d):
-                    continue
-
               all_clips.append({
                   "streamer": username,
                   "title": clip.get("title"),
@@ -327,15 +268,15 @@ else:
           except Exception as e:
             st.warning(f"Ошибка с каналом {username}: {e}")
 
-        # Сортировка
-        if sort_option == "По просмотрам (убывание)":
-          all_clips.sort(key=lambda x: x["views"], reverse=True)
-        elif sort_option == "По просмотрам (возрастание)":
-          all_clips.sort(key=lambda x: x["views"], reverse=False)
-        elif sort_option == "Сначала свежие":
+        # ПРИНУДИТЕЛЬНАЯ СОРТИРОВКА (Сначала новые по дате создания)
+        if sort_option == "Сначала свежие":
           all_clips.sort(key=lambda x: x["date"], reverse=True)
         elif sort_option == "Сначала старые":
           all_clips.sort(key=lambda x: x["date"], reverse=False)
+        elif sort_option == "По просмотрам (убывание)":
+          all_clips.sort(key=lambda x: x["views"], reverse=True)
+        elif sort_option == "По просмотрам (возрастание)":
+          all_clips.sort(key=lambda x: x["views"], reverse=False)
 
         st.session_state["clips"] = all_clips
 
@@ -345,7 +286,7 @@ else:
 # --- ОТОБРАЖЕНИЕ КАРТОЧЕК КЛИПОВ ---
 if "clips" in st.session_state and st.session_state["clips"]:
   clips = st.session_state["clips"]
-  st.write(f"Найдено клипов по вашему запросу: **{len(clips)}**")
+  st.write(f"Найдено клипов: **{len(clips)}**")
 
   cols_per_row = 3
   grid_cols = st.columns(cols_per_row)
@@ -353,7 +294,9 @@ if "clips" in st.session_state and st.session_state["clips"]:
   for idx, clip in enumerate(clips):
     col = grid_cols[idx % cols_per_row]
     with col:
-      date_formatted = clip["date"][:10] if clip["date"] else ""
+      date_formatted = (
+          clip["date"].replace("T", " ")[:16] if clip["date"] else ""
+      )
 
       st.markdown(
           f"""
