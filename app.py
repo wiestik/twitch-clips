@@ -25,7 +25,7 @@ st.markdown(
         padding-top: 1rem;
     }
     
-    /* Стилизация вкладок (убрана яркая фиолетовая подсветка) */
+    /* Стилизация вкладок (убрана яркая подсветка) */
     .stTabs [data-baseweb="tab-list"] {
         gap: 6px;
         background-color: #121214;
@@ -62,6 +62,18 @@ st.markdown(
         display: flex;
         flex-direction: column;
         height: 100%;
+        transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .clip-card:hover {
+        transform: translateY(-3px);
+        border-color: #9146ff;
+    }
+
+    .clip-card img {
+        border-radius: 6px;
+        width: 100%;
+        object-fit: cover;
     }
 
     .clip-tag {
@@ -120,10 +132,6 @@ try:
 except Exception:
   CLIENT_ID = ""
   CLIENT_SECRET = ""
-
-# Получаем базовый URL хоста для встроенного плеера Twitch
-parent_domain = "localhost"
-
 
 # --- TWITCH API ФУНКЦИИ ---
 
@@ -192,16 +200,16 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
       res = requests.get(url, headers=headers, params=params)
       if res.status_code == 200:
         for clip in res.json().get("data", []):
-          # Извлекаем уникальный slug клипа для встроенного плеера
-          clip_slug = clip.get("id")
+          thumb_url = clip.get("thumbnail_url", "")
+          thumb = thumb_url.replace("{width}", "480").replace("{height}", "270")
           all_clips.append({
-              "id": clip_slug,
               "streamer": clip.get("broadcaster_name", username),
               "title": clip.get("title"),
               "views": clip.get("view_count"),
               "date": clip.get("created_at"),
               "creator": clip.get("creator_name"),
               "url": clip.get("url"),
+              "thumb": thumb,
           })
   return all_clips
 
@@ -236,14 +244,16 @@ def fetch_global_trending_clips(client_id, client_secret, game_id=None):
 
   formatted_clips = []
   for clip in clips:
+    thumb_url = clip.get("thumbnail_url", "")
+    thumb = thumb_url.replace("{width}", "480").replace("{height}", "270")
     formatted_clips.append({
-        "id": clip.get("id"),
         "streamer": clip.get("broadcaster_name"),
         "title": clip.get("title"),
         "views": clip.get("view_count"),
         "date": clip.get("created_at"),
         "creator": clip.get("creator_name"),
         "url": clip.get("url"),
+        "thumb": thumb,
     })
   
   formatted_clips.sort(key=lambda x: x["views"], reverse=True)
@@ -315,7 +325,6 @@ else:
       if not streamers:
         st.info("👈 Добавьте хотя бы одного стримера в боковой панели.")
       else:
-        # Строка поиска по ключевым словам
         search_keyword = st.text_input("🔍 Поиск клипа (по названию или стримеру):", key="search_subs")
 
         all_clips = fetch_clips_data(tuple(streamers), CLIENT_ID, CLIENT_SECRET)
@@ -325,7 +334,6 @@ else:
         else:
           all_clips.sort(key=lambda x: x["views"], reverse=True)
 
-        # Фильтрация по ключевому слову
         if search_keyword:
           kw = search_keyword.lower()
           all_clips = [c for c in all_clips if kw in c["title"].lower() or kw in c["streamer"].lower() or kw in c["creator"].lower()]
@@ -340,13 +348,10 @@ else:
                   clip["date"].replace("T", " ")[:16] if clip["date"] else ""
               )
               
-              # Встроенный плеер Twitch (iframe)
-              embed_url = f"https://clips.twitch.tv/embed?clip={clip['id']}&parent={parent_domain}&autoplay=false"
-              
               st.markdown(
                   f"""
                     <div class="clip-card">
-                        <iframe src="{embed_url}" height="200" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                        <img src="{clip['thumb']}">
                         <h3 style="font-size: 0.95rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{clip['title']}">{clip['title']}</h3>
                         <div>
                             <span class="clip-tag">📺 {clip['streamer']}</span>
@@ -358,7 +363,7 @@ else:
                   unsafe_allow_html=True,
               )
               st.link_button(
-                  "▶ Открыть на Twitch", clip["url"], use_container_width=True
+                  "▶ Смотреть на Twitch", clip["url"], use_container_width=True
               )
               st.write("")
         else:
@@ -392,12 +397,11 @@ else:
             date_formatted = (
                 clip["date"].replace("T", " ")[:16] if clip["date"] else ""
             )
-            embed_url = f"https://clips.twitch.tv/embed?clip={clip['id']}&parent={parent_domain}&autoplay=false"
             
             st.markdown(
                 f"""
                   <div class="clip-card">
-                      <iframe src="{embed_url}" height="200" width="100%" frameborder="0" scrolling="no" allowfullscreen="true"></iframe>
+                      <img src="{clip['thumb']}">
                       <h3 style="font-size: 0.95rem; margin-top: 8px; margin-bottom: 4px; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="{clip['title']}">{clip['title']}</h3>
                       <div>
                           <span class="clip-tag">📺 {clip['streamer']}</span>
@@ -409,7 +413,7 @@ else:
                 unsafe_allow_html=True,
             )
             st.link_button(
-                "▶ Открыть на Twitch", clip["url"], use_container_width=True
+                "▶ Смотреть на Twitch", clip["url"], use_container_width=True
             )
             st.write("")
       else:
