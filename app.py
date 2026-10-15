@@ -23,7 +23,6 @@ st.markdown(
         border-right: 1px solid #27272a;
     }
     
-    /* Единый блок карточки клипа */
     .clip-card {
         background: #18181b;
         border: 1px solid #27272a;
@@ -91,7 +90,6 @@ cfg = st.session_state["config"]
 if "streamers" not in cfg or not isinstance(cfg["streamers"], list):
   cfg["streamers"] = ["dangerlyoha"]
 
-# Получаем секреты из Streamlit Secrets
 try:
   CLIENT_ID = st.secrets["TWITCH_CLIENT_ID"]
   CLIENT_SECRET = st.secrets["TWITCH_CLIENT_SECRET"]
@@ -129,7 +127,7 @@ with st.sidebar:
       "Сортировка",
       [
           "По просмотрам (убывание)",
-          "Por просмотрам (возрастание)",
+          "По просмотрам (возрастание)",
           "Сначала свежие",
           "Сначала старые",
       ],
@@ -180,7 +178,7 @@ def fetch_games_data(cid, token):
   return {}, {}
 
 
-def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
+def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=1000):
   url = "https://api.twitch.tv/helix/clips"
   params = {"broadcaster_id": broadcaster_id, "first": 100}
   if game_id:
@@ -193,6 +191,8 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
       break
     data = res.json()
     fetched = data.get("data", [])
+    if not fetched:
+      break
     clips_data.extend(fetched)
 
     cursor = data.get("pagination", {}).get("cursor")
@@ -206,7 +206,7 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
 # --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
 st.title("🟣 Twitch Clips Hub")
 st.caption(
-    "Галерея клипов с автоматической авторизацией, фильтрацией и загрузкой видео"
+    "Галерея клипов с автоматической авторизацией, фильтрацией по игре и дате"
 )
 
 streamers = cfg.get("streamers", [])
@@ -221,13 +221,34 @@ else:
     token = get_twitch_token(CLIENT_ID, CLIENT_SECRET)
     id_to_name, name_to_id = fetch_games_data(CLIENT_ID, token)
 
-    game_options = ["Все категории"] + sorted(list(name_to_id.keys()))
-    selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
-    selected_game_id = (
-        name_to_id.get(selected_game)
-        if selected_game != "Все категории"
-        else None
-    )
+    # Панель фильтров (Категория + Фильтр по дате)
+    f_col1, f_col2 = st.columns([2, 2])
+
+    with f_col1:
+      game_options = ["Все категории"] + sorted(list(name_to_id.keys()))
+      selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
+      selected_game_id = (
+          name_to_id.get(selected_game)
+          if selected_game != "Все категории"
+          else None
+      )
+
+    with f_col2:
+      # Фильтр по периоду дат
+      date_filter_mode = st.selectbox(
+          "📅 Фильтр по дате:",
+          ["За всё время", "За конкретную дату", "За диапазон дат"],
+      )
+
+    target_date = None
+    date_range = None
+
+    if date_filter_mode == "За конкретную дату":
+      target_date = st.date_input("Выберите дату:")
+    elif date_filter_mode == "За диапазон дат":
+      date_range = st.date_input(
+          "Выберите диапазон (Начало и Конец):", []
+      )
 
     if st.button("🚀 Загрузить клипы", type="primary"):
       with st.spinner("Загрузка всех клипов из Twitch..."):
@@ -240,8 +261,6 @@ else:
             clips = get_all_clips(b_id, headers, game_id=selected_game_id)
             for clip in clips:
               thumb_url = clip.get("thumbnail_url", "")
-              # Превращаем ссылку превью в прямую ссылку на .mp4 видеофайл клипа
-              # Пример превью: https://clips-media-assets2.twitch.tv/...-preview-480x270.jpg
               if "-preview-" in thumb_url:
                 video_url = thumb_url.split("-preview-")[0] + ".mp4"
               else:
@@ -255,6 +274,30 @@ else:
               g_name = clip.get("game_name")
               if not g_name or g_name.strip() == "":
                 g_name = id_to_name.get(g_id, "Без категории")
+
+              clip_date_str = clip.get("created_at", "")[:10]  # ГГГГ-ММ-ДД
+              clip_date_obj = (
+                  datetime.strptime(clip_date_str, "%Y-%m-%d").date()
+                  if clip_date_str
+                  else None
+              )
+
+              # Фильтрация по дате «на лету»
+              if clip_date_obj:
+                if (
+                    date_filter_mode == "За конкретную дату"
+                    and target_date
+                    and clip_date_obj != target_date
+                ):
+                  continue
+                if (
+                    date_filter_mode == "За диапазон дат"
+                    and isinstance(date_range, tuple)
+                    and len(date_range) == 2
+                ):
+                  start_d, end_d = date_range
+                  if not (start_d <= clip_date_obj <= end_d):
+                    continue
 
               all_clips.append({
                   "streamer": username,
@@ -288,7 +331,7 @@ else:
 # --- ОТОБРАЖЕНИЕ КАРТОЧЕК КЛИПОВ ---
 if "clips" in st.session_state and st.session_state["clips"]:
   clips = st.session_state["clips"]
-  st.write(f"Найдено клипов: **{len(clips)}**")
+  st.write(f"Найдено клипов по вашему запросу: **{len(clips)}**")
 
   cols_per_row = 3
   grid_cols = st.columns(cols_per_row)
@@ -314,7 +357,6 @@ if "clips" in st.session_state and st.session_state["clips"]:
           unsafe_allow_html=True,
       )
 
-      # Компактные кнопки в одну линию (Смотреть / Скачать видео)
       b_col1, b_col2 = st.columns([1, 1])
       with b_col1:
         st.link_button(
