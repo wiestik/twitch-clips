@@ -1,12 +1,77 @@
 from datetime import datetime
 import json
 import os
-import streamlit as st
 import requests
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
-# Настройка страницы (широкий формат, иконка)
+# Настройка страницы
 st.set_page_config(
-    page_title="Twitch Clips Gallery", page_icon="📺", layout="wide"
+    page_title="Twitch Clips Hub", page_icon="🟣", layout="wide"
+)
+
+# --- КАСТОМНЫЕ CSS-СТИЛИ ДЛЯ СОВРЕМЕННОГО ДИЗАЙНА ---
+st.markdown(
+    """
+    <style>
+    /* Главный фон и отступы */
+    .stApp {
+        background-color: #0e0e10;
+    }
+    
+    /* Стилизация боковой панели */
+    [data-testid="stSidebar"] {
+        background-color: #18181b;
+        border-right: 1px solid #27272a;
+    }
+    
+    /* Карточка клипа */
+    div[data-testid="stColumn"] {
+        background: #18181b;
+        border: 1px solid #27272a;
+        border-radius: 12px;
+        padding: 12px;
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    
+    div[data-testid="stColumn"]:hover {
+        transform: translateY(-4px);
+        border-color: #9146ff;
+        box-shadow: 0 8px 20px rgba(145, 70, 255, 0.2);
+    }
+
+    /* Изображение превью */
+    div[data-testid="stColumn"] img {
+        border-radius: 8px;
+    }
+
+    /* Кнопка Смотреть */
+    a[kind="primary"], .stLinkButton > a {
+        background-color: #9146ff !important;
+        color: white !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        text-align: center;
+        border: none !important;
+    }
+    
+    a[kind="primary"]:hover, .stLinkButton > a:hover {
+        background-color: #772ce8 !important;
+    }
+    
+    /* Бейджи и метки */
+    .clip-tag {
+        display: inline-block;
+        background: #27272a;
+        color: #adadb8;
+        font-size: 0.75rem;
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin-top: 4px;
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
 )
 
 CONFIG_FILE = "twitch_config.json"
@@ -19,7 +84,7 @@ def load_config():
         return json.load(f)
     except:
       pass
-  return {"client_id": "", "client_secret": "", "streamers": "s1mple, buster"}
+  return {"client_id": "", "client_secret": "", "streamers": "dangerlyoha"}
 
 
 def save_config(data):
@@ -34,10 +99,9 @@ config = load_config()
 
 # --- БОКОВАЯ ПАНЕЛЬ НАСТРОЕК ---
 with st.sidebar:
-  st.header("⚙️ Настройки и Стримеры")
-  client_id = st.text_input(
-      "Client ID", value=config.get("client_id", ""), type="default"
-  )
+  st.title("⚙️ Управление")
+
+  client_id = st.text_input("Client ID", value=config.get("client_id", ""))
   client_secret = st.text_input(
       "Client Secret", value=config.get("client_secret", ""), type="password"
   )
@@ -45,26 +109,34 @@ with st.sidebar:
       "Стримеры (через запятую)", value=config.get("streamers", "")
   )
 
+  st.divider()
+
+  # Автообновление
+  auto_refresh = st.checkbox("🔄 Автообновление (каждые 5 мин)", value=True)
+
   sort_option = st.selectbox(
-      "Сортировка клипов", [
+      "Сортировка",
+      [
           "По просмотрам (убывание)",
           "По просмотрам (возрастание)",
           "Сначала свежие",
-      ]
+          "Сначала старые",
+      ],
   )
 
-  if st.button("💾 Сохранить настройки"):
+  if st.button("💾 Сохранить настройки", use_container_width=True):
     save_config({
         "client_id": client_id,
         "client_secret": client_secret,
         "streamers": streamers_input,
     })
-    st.success("Настройки успешно сохранены!")
+    st.success("Сохранено!")
 
-st.title("📺 Twitch Clips Gallery (ПК & iOS)")
-st.write(
-    "Удобная галерея клипов с возможностью просмотра на компьютере и телефоне."
-)
+# Включение автообновления раз в 5 минут (300 000 мс)
+if auto_refresh:
+  st_autorefresh(interval=300000, key="clips_refresh")
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ TWITCH API ---
 
 
 def get_twitch_token(cid, csec):
@@ -77,7 +149,7 @@ def get_twitch_token(cid, csec):
   res = requests.post(url, params=params)
   if res.status_code == 200:
     return res.json().get("access_token")
-  raise Exception("Ошибка авторизации в Twitch API. Проверь ключи.")
+  raise Exception("Ошибка авторизации. Проверь Client ID и Secret.")
 
 
 def get_user_id(username, headers):
@@ -90,22 +162,63 @@ def get_user_id(username, headers):
   raise Exception(f"Стример '{username}' не найден")
 
 
-def get_clips(broadcaster_id, headers):
+@st.cache_data(ttl=3600)
+def fetch_top_games(cid, token):
+  """Кэшируемая подгрузка популярных категорий для фильтра"""
+  try:
+    headers = {"Client-ID": cid, "Authorization": f"Bearer {token}"}
+    url = "https://api.twitch.tv/helix/games/top?first=100"
+    res = requests.get(url, headers=headers)
+    if res.status_code == 200:
+      return {g["name"]: g["id"] for g in res.json().get("data", [])}
+  except:
+    pass
+  return {}
+
+
+def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
+  """Загрузка ВСЕХ клипов с поддержкой пагинации (без лимита в 29 клипов)"""
   url = "https://api.twitch.tv/helix/clips"
-  params = {"broadcaster_id": broadcaster_id, "first": 30}
-  res = requests.get(url, headers=headers, params=params)
-  if res.status_code == 200:
-    return res.json().get("data", [])
-  return []
+  params = {"broadcaster_id": broadcaster_id, "first": 100}
+  if game_id:
+    params["game_id"] = game_id
+
+  clips_data = []
+  while True:
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code != 200:
+      break
+    data = res.json()
+    fetched = data.get("data", [])
+    clips_data.extend(fetched)
+
+    cursor = data.get("pagination", {}).get("cursor")
+    if cursor and len(clips_data) < max_clips:
+      params["after"] = cursor
+    else:
+      break
+  return clips_data
 
 
-if st.button("🚀 Загрузить клипы", type="primary"):
-  if not client_id or not client_secret or not streamers_input:
-    st.error("Заполни Client ID, Client Secret и список стримеров в боковом меню!")
-  else:
-    with st.spinner("Загрузка клипов из Twitch..."):
-      try:
-        token = get_twitch_token(client_id, client_secret)
+# --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
+st.title("🟣 Twitch Clips Hub")
+st.caption(
+    "Персональная галерея клипов с поддержкой категорий и синхронизацией ПК & iOS"
+)
+
+if client_id and client_secret:
+  try:
+    token = get_twitch_token(client_id, client_secret)
+
+    # Загружаем категории для выпадающего списка
+    games_map = fetch_top_games(client_id, token)
+    game_options = ["Все категории"] + list(games_map.keys())
+
+    selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
+    selected_game_id = games_map.get(selected_game) if selected_game != "Все категории" else None
+
+    if st.button("🚀 Загрузить клипы", type="primary"):
+      with st.spinner("Загрузка всех клипов из Twitch..."):
         headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
         streamers = [s.strip() for s in streamers_input.split(",") if s.strip()]
 
@@ -113,23 +226,25 @@ if st.button("🚀 Загрузить клипы", type="primary"):
         for username in streamers:
           try:
             b_id = get_user_id(username, headers)
-            clips = get_clips(b_id, headers)
+            clips = get_all_clips(b_id, headers, game_id=selected_game_id)
             for clip in clips:
               thumb = (
                   clip.get("thumbnail_url")
-                  .replace("{width}", "320")
-                  .replace("{height}", "180")
+                  .replace("{width}", "480")
+                  .replace("{height}", "270")
               )
               all_clips.append({
                   "streamer": username,
                   "title": clip.get("title"),
                   "views": clip.get("view_count"),
                   "date": clip.get("created_at"),
+                  "game": clip.get("game_name", "Без категории"),
+                  "creator": clip.get("creator_name"),
                   "url": clip.get("url"),
                   "thumb": thumb,
               })
           except Exception as e:
-            st.warning(f"Не удалось загрузить клипы для {username}: {e}")
+            st.warning(f"Ошибка с каналом {username}: {e}")
 
         # Сортировка
         if sort_option == "По просмотрам (убывание)":
@@ -138,22 +253,42 @@ if st.button("🚀 Загрузить клипы", type="primary"):
           all_clips.sort(key=lambda x: x["views"], reverse=False)
         elif sort_option == "Сначала свежие":
           all_clips.sort(key=lambda x: x["date"], reverse=True)
+        elif sort_option == "Сначала старые":
+          all_clips.sort(key=lambda x: x["date"], reverse=False)
 
         st.session_state["clips"] = all_clips
-        st.success(f"Успешно загружено клипов: {len(all_clips)}")
-      except Exception as e:
-        st.error(f"Ошибка: {e}")
 
-# --- ОТОБРАЖЕНИЕ СЕТКИ КЛИПОВ ---
+  except Exception as e:
+    st.error(f"Ошибка подключения к Twitch API: {e}")
+else:
+  st.info("👈 Укажи Client ID и Client Secret в левой панели для начала работы.")
+
+# --- ОТОБРАЖЕНИЕ КАРТОЧЕК КЛИПОВ ---
 if "clips" in st.session_state and st.session_state["clips"]:
   clips = st.session_state["clips"]
-  cols = st.columns(3)  # Сетка по 3 карточки в ряд
+  st.write(f"Найдено клипов: **{len(clips)}**")
+
+  cols_per_row = 3
+  cols = st.columns(cols_per_row)
 
   for idx, clip in enumerate(clips):
-    col = cols[idx % 3]
+    col = cols[idx % cols_per_row]
     with col:
       st.image(clip["thumb"], use_container_width=True)
-      st.markdown(f"**{clip['title']}**")
-      st.caption(f"📺 {clip['streamer']} | 👀 {clip['views']} просмотров")
-      st.markdown(f"[▶ Смотреть на Twitch]({clip['url']})")
-      st.divider()
+      st.markdown(f"### {clip['title']}")
+
+      # Форматирование даты
+      date_formatted = clip["date"][:10] if clip["date"] else ""
+
+      st.markdown(f"""
+            <span class="clip-tag">🎮 {clip['game']}</span> 
+            <span class="clip-tag">📺 {clip['streamer']}</span>
+            <br>
+            <small style="color: #adadb8;">👀 {clip['views']:,} просмотров • 📅 {date_formatted}</small><br>
+            <small style="color: #adadb8;">Автор клипа: {clip['creator']}</small>
+            """, unsafe_allow_html=True)
+
+      st.link_button(
+          "▶ Смотреть на Twitch", clip["url"], use_container_width=True
+      )
+      st.write("")
