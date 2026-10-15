@@ -10,7 +10,7 @@ st.set_page_config(
     page_title="Twitch Clips Hub", page_icon="🟣", layout="wide"
 )
 
-# --- КАСТОМНЫЕ CSS-СТИЛИ (Точечный hover на карточку, современный дизайн) ---
+# --- КАСТОМНЫЕ CSS-СТИЛИ (Единая карточка с hover и кнопками) ---
 st.markdown(
     """
     <style>
@@ -23,26 +23,30 @@ st.markdown(
         border-right: 1px solid #27272a;
     }
     
-    /* Контейнер отдельной карточки */
+    /* Единый блок карточки клипа */
     .clip-card {
         background: #18181b;
         border: 1px solid #27272a;
         border-radius: 12px;
-        padding: 12px;
+        padding: 14px;
         margin-bottom: 20px;
         transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
     }
     
-    /* Эффект при наведении строго на конкретную карточку */
+    /* Подсветка всей карточки целиком при наведении */
     .clip-card:hover {
         transform: translateY(-4px);
         border-color: #9146ff;
-        box-shadow: 0 8px 20px rgba(145, 70, 255, 0.25);
+        box-shadow: 0 8px 24px rgba(145, 70, 255, 0.25);
     }
 
     .clip-card img {
         border-radius: 8px;
         width: 100%;
+        object-fit: cover;
     }
 
     .clip-tag {
@@ -70,11 +74,7 @@ def load_config():
         return json.load(f)
     except:
       pass
-  return {
-      "client_id": "",
-      "client_secret": "",
-      "streamers": ["dangerlyoha"],
-  }
+  return {"streamers": ["dangerlyoha"]}
 
 
 def save_config(data):
@@ -85,7 +85,6 @@ def save_config(data):
     pass
 
 
-# Инициализация session_state для автосохранения
 if "config" not in st.session_state:
   st.session_state["config"] = load_config()
 
@@ -93,35 +92,20 @@ cfg = st.session_state["config"]
 if "streamers" not in cfg or not isinstance(cfg["streamers"], list):
   cfg["streamers"] = ["dangerlyoha"]
 
-# --- БОКОВАЯ ПАНЕЛЬ НАСТРОЕК (С автосохранением) ---
+# Получаем Client ID и Secret из защищенных секретов Streamlit (st.secrets)
+# Это убирает необходимость вводить их вручную на экране!
+try:
+  CLIENT_ID = st.secrets["TWITCH_CLIENT_ID"]
+  CLIENT_SECRET = st.secrets["TWITCH_CLIENT_SECRET"]
+except Exception:
+  CLIENT_ID = ""
+  CLIENT_SECRET = ""
+
+# --- БОКОВАЯ ПАНЕЛЬ УПРАВЛЕНИЯ ---
 with st.sidebar:
   st.title("⚙️ Управление")
-
-  # Автосохранение Client ID
-  new_client_id = st.text_input(
-      "Client ID", value=cfg.get("client_id", "")
-  )
-  if new_client_id != cfg.get("client_id"):
-    cfg["client_id"] = new_client_id
-    save_config(cfg)
-
-  # Автосохранение Client Secret
-  new_client_secret = st.text_input(
-      "Client Secret", value=cfg.get("client_secret", ""), type="password"
-  )
-  new_client_secret_str = (
-      new_client_secret
-      if new_client_secret is not None
-      else cfg.get("client_secret", "")
-  )
-  if new_client_secret_str != cfg.get("client_secret"):
-    cfg["client_secret"] = new_client_secret_str
-    save_config(cfg)
-
-  st.divider()
   st.subheader("📺 Стримеры")
 
-  # Удобное добавление/удаление стримеров без запятых
   new_streamer = st.text_input("Добавить стримера (ник)")
   if st.button("➕ Добавить"):
     clean_name = new_streamer.strip().lower()
@@ -169,7 +153,7 @@ def get_twitch_token(cid, csec):
   res = requests.post(url, params=params)
   if res.status_code == 200:
     return res.json().get("access_token")
-  raise Exception("Ошибка авторизации. Проверь Client ID и Secret.")
+  raise Exception("Ошибка авторизации. Проверь секреты в настройках Streamlit.")
 
 
 def get_user_id(username, headers):
@@ -183,16 +167,20 @@ def get_user_id(username, headers):
 
 
 @st.cache_data(ttl=3600)
-def fetch_top_games(cid, token):
+def fetch_games_data(cid, token):
+  """Возвращает словари для конвертации ID игр в названия и наоборот"""
   try:
     headers = {"Client-ID": cid, "Authorization": f"Bearer {token}"}
     url = "https://api.twitch.tv/helix/games/top?first=100"
     res = requests.get(url, headers=headers)
     if res.status_code == 200:
-      return {g["name"]: g["id"] for g in res.json().get("data", [])}
+      data = res.json().get("data", [])
+      id_to_name = {g["id"]: g["name"] for g in data}
+      name_to_id = {g["name"]: g["id"] for g in data}
+      return id_to_name, name_to_id
   except:
     pass
-  return {}
+  return {}, {}
 
 
 def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
@@ -221,30 +209,33 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=200):
 # --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
 st.title("🟣 Twitch Clips Hub")
 st.caption(
-    "Галерея клипов с автосохранением настроек, управлением стримерами и"
-    " фильтрацией"
+    "Галерея клипов с автоматической авторизацией, фильтрацией и скачиванием"
 )
 
-client_id = cfg.get("client_id", "")
-client_secret = cfg.get("client_secret", "")
 streamers = cfg.get("streamers", [])
 
-if client_id and client_secret:
+if not CLIENT_ID or not CLIENT_SECRET:
+  st.error(
+      "⚠️ Не найдены ключи `TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET` в"
+      " секретах Streamlit! Добавьте их в настройках деплоя (Advanced"
+      " settings -> Secrets)."
+  )
+else:
   try:
-    token = get_twitch_token(client_id, client_secret)
-    games_map = fetch_top_games(client_id, token)
-    game_options = ["Все категории"] + list(games_map.keys())
+    token = get_twitch_token(CLIENT_ID, CLIENT_SECRET)
+    id_to_name, name_to_id = fetch_games_data(CLIENT_ID, token)
 
+    game_options = ["Все категории"] + sorted(list(name_to_id.keys()))
     selected_game = st.selectbox("🎮 Фильтр по категории / игре:", game_options)
     selected_game_id = (
-        games_map.get(selected_game)
+        name_to_id.get(selected_game)
         if selected_game != "Все категории"
         else None
     )
 
     if st.button("🚀 Загрузить клипы", type="primary"):
       with st.spinner("Загрузка всех клипов из Twitch..."):
-        headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
+        headers = {"Client-ID": CLIENT_ID, "Authorization": f"Bearer {token}"}
         all_clips = []
 
         for username in streamers:
@@ -257,12 +248,19 @@ if client_id and client_secret:
                   .replace("{width}", "480")
                   .replace("{height}", "270")
               )
+
+              # Точное определение категории (если game_name пустое, ищем по game_id)
+              g_id = clip.get("game_id")
+              g_name = clip.get("game_name")
+              if not g_name or g_name.strip() == "":
+                g_name = id_to_name.get(g_id, "Без категории")
+
               all_clips.append({
                   "streamer": username,
                   "title": clip.get("title"),
                   "views": clip.get("view_count"),
                   "date": clip.get("created_at"),
-                  "game": clip.get("game_name", "Без категории"),
+                  "game": g_name,
                   "creator": clip.get("creator_name"),
                   "url": clip.get("url"),
                   "thumb": thumb,
@@ -284,13 +282,8 @@ if client_id and client_secret:
 
   except Exception as e:
     st.error(f"Ошибка подключения к Twitch API: {e}")
-else:
-  st.info(
-      "👈 Укажи Client ID и Client Secret в боковой панели. Они сохранятся"
-      " автоматически!"
-  )
 
-# --- ОТОБРАЖЕНИЕ КАРТОЧЕК КЛИПОВ С ТОЧЕЧНЫМ HOVER ---
+# --- ОТОБРАЖЕНИЕ КАРТОЧЕК КЛИПОВ ---
 if "clips" in st.session_state and st.session_state["clips"]:
   clips = st.session_state["clips"]
   st.write(f"Найдено клипов: **{len(clips)}**")
@@ -302,21 +295,33 @@ if "clips" in st.session_state and st.session_state["clips"]:
     col = grid_cols[idx % cols_per_row]
     with col:
       date_formatted = clip["date"][:10] if clip["date"] else ""
-      # Оборачиваем каждую карточку в кастомный HTML-контейнер для точечного эффекта hover
+
+      # Карточка клипа с инкапсулированными элементами внутри единого HTML-блока
       st.markdown(
           f"""
             <div class="clip-card">
                 <img src="{clip['thumb']}">
                 <h3 style="font-size: 1.05rem; margin-top: 10px; margin-bottom: 6px; color: #ffffff;">{clip['title']}</h3>
-                <span class="clip-tag">🎮 {clip['game']}</span> 
-                <span class="clip-tag">📺 {clip['streamer']}</span><br>
+                <div>
+                    <span class="clip-tag">🎮 {clip['game']}</span> 
+                    <span class="clip-tag">📺 {clip['streamer']}</span>
+                </div>
                 <small style="color: #adadb8; display: block; margin-top: 6px;">👀 {clip['views']:,} просмотров • 📅 {date_formatted}</small>
-                <small style="color: #adadb8;">Автор: {clip['creator']}</small>
+                <small style="color: #adadb8; margin-bottom: 10px;">Автор: {clip['creator']}</small>
             </div>
             """,
           unsafe_allow_html=True,
       )
-      st.link_button(
-          "▶ Смотреть на Twitch", clip["url"], use_container_width=True
-      )
+
+      # Кнопки управления под карточкой в связке
+      b_col1, b_col2 = st.columns(2)
+      with b_col1:
+        st.link_button(
+            "▶ Смотреть", clip["url"], use_container_width=True
+        )
+      with b_col2:
+        # Прямая ссылка на скачивание превью в высоком разрешении
+        st.link_button(
+            "📥 Скачать", clip["thumb"], use_container_width=True
+        )
       st.write("")
