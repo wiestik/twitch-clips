@@ -134,7 +134,6 @@ def get_user_id(username, headers):
   return None
 
 
-# Кэшируем запросы на 60 секунд, чтобы убрать подлагивания интерфейса при автообновлении
 @st.cache_data(ttl=60)
 def fetch_clips_data(streamers_tuple, client_id, client_secret):
   token = get_twitch_token(client_id, client_secret)
@@ -173,18 +172,24 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
 
 @st.cache_data(ttl=60)
 def fetch_global_trending_clips(client_id, client_secret):
-  """Загружает популярные/рекомендованные клипы со всего Twitch за неделю"""
+  """Загружает популярные/рекомендованные клипы со всего Twitch (без ошибок параметров)"""
   token = get_twitch_token(client_id, client_secret)
   headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
   
+  # Используем популярные игры или топ стримеров для глобальных рекомендаций, либо запрашиваем общие тренды
+  # Чтобы получить много просмотров, отсортируем по дате за последние 2 дня
   url = "https://api.twitch.tv/helix/clips"
   started_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
-  params = {"first": 30, "started_at": started_at, "is_featured": "true"}
+  params = {"first": 30, "started_at": started_at}
   
   res = requests.get(url, headers=headers, params=params)
   clips = []
   if res.status_code == 200:
-    for clip in res.json().get("data", []):
+    data = res.json().get("data", [])
+    # Сортируем полученные глобальные клипы по просмотрам, чтобы в рекомендациях были самые популярные
+    data.sort(key=lambda x: x.get("view_count", 0), reverse=True)
+    
+    for clip in data:
       thumb = (
           clip.get("thumbnail_url", "")
           .replace("{width}", "480")
@@ -271,7 +276,6 @@ if not CLIENT_ID or not CLIENT_SECRET:
   st.error("⚠️ Укажите `TWITCH_CLIENT_ID` и `TWITCH_CLIENT_SECRET` в секретах Streamlit!")
 else:
   try:
-    # Создаем вкладки интерфейса
     tab_subs, tab_trending = st.tabs(["📺 Мои стримеры", "🔥 Рекомендации Twitch"])
 
     # --- Вкладка 1: Подписки ---
