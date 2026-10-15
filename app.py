@@ -147,7 +147,7 @@ if st.button("🚀 Загрузить клипы", type="primary"):
 # --- ОТОБРАЖЕНИЕ СЕТКИ КЛИПОВ ---
 if "clips" in st.session_state and st.session_state["clips"]:
   clips = st.session_state["clips"]
-  cols = st.columns(3)  # Сетка по 3 карточки в ряд (на мобильных сжатиется сама)
+  cols = st.columns(3)  # Сетка по 3 карточки в ряд
 
   for idx, clip in enumerate(clips):
     col = cols[idx % 3]
@@ -155,5 +155,5 @@ if "clips" in st.session_state and st.session_state["clips"]:
       st.image(clip["thumb"], use_container_width=True)
       st.markdown(f"**{clip['title']}**")
       st.caption(f"📺 {clip['streamer']} | 👀 {clip['views']} просмотров")
-      st.markdown(f"[▶ Смотреть на Twitch]({clip['url'])")
+      st.markdown(f"[▶ Смотреть на Twitch]({clip['url']})")
       st.divider()
