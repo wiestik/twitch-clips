@@ -178,9 +178,24 @@ def fetch_games_data(cid, token):
   return {}, {}
 
 
-def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=1000):
+from datetime import datetime, timedelta, timezone
+
+# Заменяем функцию get_all_clips на эту версию:
+
+
+def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=500):
   url = "https://api.twitch.tv/helix/clips"
-  params = {"broadcaster_id": broadcaster_id, "first": 100}
+
+  # Берем клипы за последние 30 дней, чтобы свежие точно попадали в выдачу API
+  started_at = (
+      datetime.now(timezone.utc) - timedelta(days=30)
+  ).isoformat()
+
+  params = {
+      "broadcaster_id": broadcaster_id,
+      "first": 100,
+      "started_at": started_at,  # Принудительно запрашиваем свежие за месяц
+  }
   if game_id:
     params["game_id"] = game_id
 
@@ -202,11 +217,10 @@ def get_all_clips(broadcaster_id, headers, game_id=None, max_clips=1000):
       break
   return clips_data
 
-
 # --- ГЛАВНЫЙ ИНТЕРФЕЙС ---
-st.title("🟣 Twitch Clips Hub")
+st.title("🟣 Twitch clips")
 st.caption(
-    "Галерея клипов с автоматической авторизацией, фильтрацией по игре и дате"
+    "Удобный поиск клипов с Twitch"
 )
 
 streamers = cfg.get("streamers", [])
