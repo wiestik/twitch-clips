@@ -10,12 +10,13 @@ st.set_page_config(
     page_title="Twitch Clips Hub", page_icon="🟣", layout="wide"
 )
 
-# --- МИНИМАЛИСТИЧНЫЙ И СДЕРЖАННЫЙ ДИЗАЙН ---
+# --- СОВРЕМЕННЫЙ И СТИЛЬНЫЙ ДИЗАЙН ---
 st.markdown(
     """
     <style>
     .stApp {
         background-color: #0e0e10;
+        color: #efeff1;
     }
     
     [data-testid="stSidebar"] {
@@ -24,25 +25,51 @@ st.markdown(
         padding-top: 1rem;
     }
     
+    /* Стилизация вкладок (Tabs) */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background-color: #121214;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #222226;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 40px;
+        background-color: transparent;
+        border-radius: 8px;
+        color: #adadb8;
+        font-weight: 600;
+        border: none;
+        padding: 0 20px;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        background-color: #9146ff !important;
+        color: white !important;
+    }
+
+    /* Карточка клипа */
     .clip-card {
         background: #18181b;
         border: 1px solid #27272a;
-        border-radius: 10px;
+        border-radius: 12px;
         padding: 12px;
-        margin-bottom: 12px;
-        transition: transform 0.2s ease, border-color 0.2s ease;
+        margin-bottom: 14px;
+        transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
         display: flex;
         flex-direction: column;
         height: 100%;
     }
     
     .clip-card:hover {
-        transform: translateY(-3px);
+        transform: translateY(-4px);
         border-color: #9146ff;
+        box-shadow: 0 6px 20px rgba(145, 70, 255, 0.2);
     }
 
     .clip-card img {
-        border-radius: 6px;
+        border-radius: 8px;
         width: 100%;
         object-fit: cover;
     }
@@ -50,12 +77,20 @@ st.markdown(
     .clip-tag {
         display: inline-block;
         background: #27272a;
-        color: #adadb8;
+        color: #efeff1;
         font-size: 0.75rem;
-        padding: 2px 6px;
-        border-radius: 4px;
+        padding: 3px 8px;
+        border-radius: 6px;
         margin-top: 6px;
         margin-right: 4px;
+        font-weight: 500;
+    }
+    
+    /* Компактные фильтры */
+    div[data-baseweb="select"] > div {
+        background-color: #18181b !important;
+        border-color: #27272a !important;
+        border-radius: 8px !important;
     }
     </style>
 """,
@@ -183,7 +218,6 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
 
 @st.cache_data(ttl=60)
 def fetch_global_trending_clips(client_id, client_secret, game_id=None):
-  """Загружает трендовые клипы со всего Twitch с поддержкой фильтра по игре"""
   token = get_twitch_token(client_id, client_secret)
   headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
 
@@ -193,7 +227,7 @@ def fetch_global_trending_clips(client_id, client_secret, game_id=None):
     clips_url = "https://api.twitch.tv/helix/clips"
     
     if game_id:
-      params = {"game_id": game_id, "first": 30, "started_at": started_at}
+      params = {"game_id": game_id, "first": 40, "started_at": started_at}
       res = requests.get(clips_url, headers=headers, params=params)
       if res.status_code == 200:
         for clip in res.json().get("data", []):
@@ -213,13 +247,12 @@ def fetch_global_trending_clips(client_id, client_secret, game_id=None):
               "broadcaster_id": clip.get("broadcaster_id"),
           })
     else:
-      # Берем топ игры, если игра не выбрана
       top_games_url = "https://api.twitch.tv/helix/games/top?first=3"
       games_res = requests.get(top_games_url, headers=headers)
       if games_res.status_code == 200:
         game_ids = [g["id"] for g in games_res.json().get("data", [])]
         for g_id in game_ids:
-          params = {"game_id": g_id, "first": 15, "started_at": started_at}
+          params = {"game_id": g_id, "first": 20, "started_at": started_at}
           res = requests.get(clips_url, headers=headers, params=params)
           if res.status_code == 200:
             for clip in res.json().get("data", []):
@@ -245,38 +278,27 @@ def fetch_global_trending_clips(client_id, client_secret, game_id=None):
 
 
 def filter_clips_by_language(clips, target_lang, headers):
-  """Фильтрует список клипов по языку трансляции стримера через API пользователей"""
+  """Исправленный и надежный фильтр языка через эндпоинт каналов Twitch"""
   if not target_lang or not clips:
     return clips
 
-  # Собираем уникальные broadcaster_id пакетами
-  b_ids = list(set([c["broadcaster_id"] for c in clips if "broadcaster_id" in c]))
+  b_ids = list(set([str(c["broadcaster_id"]) for c in clips if "broadcaster_id" in c]))
   if not b_ids:
     return clips
 
   lang_map = {}
-  # Twitch API позволяет запрашивать до 100 пользователей за раз
-  for i in range(0, len(b_ids), 100):
-    chunk = b_ids[i:i+100]
-    users_url = "https://api.twitch.tv/helix/users?" + "&".join([f"id={uid}" for uid in chunk])
-    res = requests.get(users_url, headers=headers)
-    if res.status_code == 200:
-      # Примечание: язык канала берется из профиля / трансляции
-      # Для точной фильтрации по языку запросим данные каналов
-      pass
-
-  # Получим языки через эндпоинт каналов (/helix/channels)
+  # Запрашиваем батчами по 100 ID
   for i in range(0, len(b_ids), 100):
     chunk = b_ids[i:i+100]
     channels_url = "https://api.twitch.tv/helix/channels?" + "&".join([f"broadcaster_id={uid}" for uid in chunk])
     res = requests.get(channels_url, headers=headers)
     if res.status_code == 200:
       for chan in res.json().get("data", []):
-        lang_map[chan["broadcaster_id"]] = chan.get("broadcaster_language", "")
+        lang_map[str(chan["broadcaster_id"])] = chan.get("broadcaster_language", "")
 
   filtered = []
   for clip in clips:
-    b_id = clip.get("broadcaster_id")
+    b_id = str(clip.get("broadcaster_id"))
     if lang_map.get(b_id) == target_lang:
       filtered.append(clip)
   return filtered
@@ -396,19 +418,20 @@ else:
         else:
           st.warning("Клипы не найдены для выбранных каналов за последние дни.")
 
-    # --- Вкладка 2: Рекомендации со всего Twitch (с фильтрами по языку и игре) ---
+    # --- Вкладка 2: Рекомендации со всего Twitch (компактные стильные фильтры) ---
     with tab_trending:
-      st.caption("Поиск трендовых клипов на платформе с фильтрацией по игре и языку")
-
-      # Получаем список игр для выпадающего списка
       games_map = fetch_top_games(CLIENT_ID, CLIENT_SECRET)
       game_names = ["Все игры"] + sorted(list(games_map.keys()))
 
-      f_col1, f_col2 = st.columns(2)
+      # Компактные фильтры в одну строку
+      f_col1, f_col2 = st.columns([1, 1])
       with f_col1:
-        selected_game_name = st.selectbox("🎮 Категория (игра):", game_names)
+        selected_game_name = st.selectbox("🎮 Категория", game_names, label_visibility="collapsed")
+        if selected_game_name == "Все игры":
+          st.caption("🎮 Категория: Все игры")
+        else:
+          st.caption(f"🎮 Категория: {selected_game_name}")
       with f_col2:
-        # Словарь кодов языков Twitch
         lang_options = {
             "Все языки": None,
             "🇷🇺 Русский": "ru",
@@ -418,18 +441,17 @@ else:
             "🇫🇷 Французский": "fr",
             "🇪🇸 Испанский": "es"
         }
-        selected_lang_label = st.selectbox("🌍 Язык стримера:", list(lang_options.keys()))
+        selected_lang_label = st.selectbox("🌍 Язык", list(lang_options.keys()), label_visibility="collapsed")
         target_lang_code = lang_options[selected_lang_label]
+        st.caption(f"🌍 Язык: {selected_lang_label}")
 
       selected_game_id = games_map.get(selected_game_name) if selected_game_name != "Все игры" else None
 
       trending_clips, api_headers = fetch_global_trending_clips(CLIENT_ID, CLIENT_SECRET, game_id=selected_game_id)
 
-      # Фильтрация по языку, если он выбран
       if target_lang_code and trending_clips:
         trending_clips = filter_clips_by_language(trending_clips, target_lang_code, api_headers)
 
-      # Сортировка рекомендаций по просмотрам
       trending_clips.sort(key=lambda x: x["views"], reverse=True)
 
       if trending_clips:
