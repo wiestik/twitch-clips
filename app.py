@@ -134,6 +134,17 @@ def get_user_id(username, headers):
   return None
 
 
+@st.cache_data(ttl=3600)
+def fetch_top_games(client_id, client_secret):
+  token = get_twitch_token(client_id, client_secret)
+  headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
+  url = "https://api.twitch.tv/helix/games/top?first=50"
+  res = requests.get(url, headers=headers)
+  if res.status_code == 200:
+    return {g["name"]: g["id"] for g in res.json().get("data", [])}
+  return {}
+
+
 @st.cache_data(ttl=60)
 def fetch_clips_data(streamers_tuple, client_id, client_secret):
   token = get_twitch_token(client_id, client_secret)
@@ -171,47 +182,104 @@ def fetch_clips_data(streamers_tuple, client_id, client_secret):
 
 
 @st.cache_data(ttl=60)
-def fetch_global_trending_clips(client_id, client_secret):
-  """Загружает трендовые клипы со всего Twitch через поиск популярных игр"""
+def fetch_global_trending_clips(client_id, client_secret, game_id=None):
+  """Загружает трендовые клипы со всего Twitch с поддержкой фильтра по игре"""
   token = get_twitch_token(client_id, client_secret)
   headers = {"Client-ID": client_id, "Authorization": f"Bearer {token}"}
 
   clips = []
   try:
-    # 1. Получаем топ-3 игры на Twitch прямо сейчас
-    top_games_url = "https://api.twitch.tv/helix/games/top?first=3"
-    games_res = requests.get(top_games_url, headers=headers)
-    if games_res.status_code == 200:
-      game_ids = [g["id"] for g in games_res.json().get("data", [])]
-
-      # 2. Запрашиваем клипы для этих популярных игр за последние 2 дня
-      started_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-      for g_id in game_ids:
-        clips_url = "https://api.twitch.tv/helix/clips"
-        params = {"game_id": g_id, "first": 15, "started_at": started_at}
-        res = requests.get(clips_url, headers=headers, params=params)
-        if res.status_code == 200:
-          for clip in res.json().get("data", []):
-            thumb = (
-                clip.get("thumbnail_url", "")
-                .replace("{width}", "480")
-                .replace("{height}", "270")
-            )
-            clips.append({
-                "streamer": clip.get("broadcaster_name"),
-                "title": clip.get("title"),
-                "views": clip.get("view_count"),
-                "date": clip.get("created_at"),
-                "creator": clip.get("creator_name"),
-                "url": clip.get("url"),
-                "thumb": thumb,
-            })
+    started_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    clips_url = "https://api.twitch.tv/helix/clips"
+    
+    if game_id:
+      params = {"game_id": game_id, "first": 30, "started_at": started_at}
+      res = requests.get(clips_url, headers=headers, params=params)
+      if res.status_code == 200:
+        for clip in res.json().get("data", []):
+          thumb = (
+              clip.get("thumbnail_url", "")
+              .replace("{width}", "480")
+              .replace("{height}", "270")
+          )
+          clips.append({
+              "streamer": clip.get("broadcaster_name"),
+              "title": clip.get("title"),
+              "views": clip.get("view_count"),
+              "date": clip.get("created_at"),
+              "creator": clip.get("creator_name"),
+              "url": clip.get("url"),
+              "thumb": thumb,
+              "broadcaster_id": clip.get("broadcaster_id"),
+          })
+    else:
+      # Берем топ игры, если игра не выбрана
+      top_games_url = "https://api.twitch.tv/helix/games/top?first=3"
+      games_res = requests.get(top_games_url, headers=headers)
+      if games_res.status_code == 200:
+        game_ids = [g["id"] for g in games_res.json().get("data", [])]
+        for g_id in game_ids:
+          params = {"game_id": g_id, "first": 15, "started_at": started_at}
+          res = requests.get(clips_url, headers=headers, params=params)
+          if res.status_code == 200:
+            for clip in res.json().get("data", []):
+              thumb = (
+                  clip.get("thumbnail_url", "")
+                  .replace("{width}", "480")
+                  .replace("{height}", "270")
+              )
+              clips.append({
+                  "streamer": clip.get("broadcaster_name"),
+                  "title": clip.get("title"),
+                  "views": clip.get("view_count"),
+                  "date": clip.get("created_at"),
+                  "creator": clip.get("creator_name"),
+                  "url": clip.get("url"),
+                  "thumb": thumb,
+                  "broadcaster_id": clip.get("broadcaster_id"),
+              })
   except Exception:
     pass
 
-  # Сортируем собранные клипы по просмотрам
-  clips.sort(key=lambda x: x["views"], reverse=True)
-  return clips
+  return clips, headers
+
+
+def filter_clips_by_language(clips, target_lang, headers):
+  """Фильтрует список клипов по языку трансляции стримера через API пользователей"""
+  if not target_lang or not clips:
+    return clips
+
+  # Собираем уникальные broadcaster_id пакетами
+  b_ids = list(set([c["broadcaster_id"] for c in clips if "broadcaster_id" in c]))
+  if not b_ids:
+    return clips
+
+  lang_map = {}
+  # Twitch API позволяет запрашивать до 100 пользователей за раз
+  for i in range(0, len(b_ids), 100):
+    chunk = b_ids[i:i+100]
+    users_url = "https://api.twitch.tv/helix/users?" + "&".join([f"id={uid}" for uid in chunk])
+    res = requests.get(users_url, headers=headers)
+    if res.status_code == 200:
+      # Примечание: язык канала берется из профиля / трансляции
+      # Для точной фильтрации по языку запросим данные каналов
+      pass
+
+  # Получим языки через эндпоинт каналов (/helix/channels)
+  for i in range(0, len(b_ids), 100):
+    chunk = b_ids[i:i+100]
+    channels_url = "https://api.twitch.tv/helix/channels?" + "&".join([f"broadcaster_id={uid}" for uid in chunk])
+    res = requests.get(channels_url, headers=headers)
+    if res.status_code == 200:
+      for chan in res.json().get("data", []):
+        lang_map[chan["broadcaster_id"]] = chan.get("broadcaster_language", "")
+
+  filtered = []
+  for clip in clips:
+    b_id = clip.get("broadcaster_id")
+    if lang_map.get(b_id) == target_lang:
+      filtered.append(clip)
+  return filtered
 
 
 # --- МИНИМАЛИСТИЧНАЯ БОКОВАЯ ПАНЕЛЬ ---
@@ -328,10 +396,41 @@ else:
         else:
           st.warning("Клипы не найдены для выбранных каналов за последние дни.")
 
-    # --- Вкладка 2: Рекомендации со всего Twitch ---
+    # --- Вкладка 2: Рекомендации со всего Twitch (с фильтрами по языку и игре) ---
     with tab_trending:
-      st.caption("Популярные и трендовые клипы на платформе в реальном времени")
-      trending_clips = fetch_global_trending_clips(CLIENT_ID, CLIENT_SECRET)
+      st.caption("Поиск трендовых клипов на платформе с фильтрацией по игре и языку")
+
+      # Получаем список игр для выпадающего списка
+      games_map = fetch_top_games(CLIENT_ID, CLIENT_SECRET)
+      game_names = ["Все игры"] + sorted(list(games_map.keys()))
+
+      f_col1, f_col2 = st.columns(2)
+      with f_col1:
+        selected_game_name = st.selectbox("🎮 Категория (игра):", game_names)
+      with f_col2:
+        # Словарь кодов языков Twitch
+        lang_options = {
+            "Все языки": None,
+            "🇷🇺 Русский": "ru",
+            "🇺🇦 Украинский": "uk",
+            "🇺🇸 США / Английский": "en",
+            "🇩🇪 Немецкий": "de",
+            "🇫🇷 Французский": "fr",
+            "🇪🇸 Испанский": "es"
+        }
+        selected_lang_label = st.selectbox("🌍 Язык стримера:", list(lang_options.keys()))
+        target_lang_code = lang_options[selected_lang_label]
+
+      selected_game_id = games_map.get(selected_game_name) if selected_game_name != "Все игры" else None
+
+      trending_clips, api_headers = fetch_global_trending_clips(CLIENT_ID, CLIENT_SECRET, game_id=selected_game_id)
+
+      # Фильтрация по языку, если он выбран
+      if target_lang_code and trending_clips:
+        trending_clips = filter_clips_by_language(trending_clips, target_lang_code, api_headers)
+
+      # Сортировка рекомендаций по просмотрам
+      trending_clips.sort(key=lambda x: x["views"], reverse=True)
 
       if trending_clips:
         t_cols_per_row = 3
@@ -361,7 +460,7 @@ else:
             )
             st.write("")
       else:
-        st.warning("Не удалось загрузить рекомендации с Twitch.")
+        st.warning("По вашему фильтру клипы не найдены. Попробуйте выбрать другую категорию или язык.")
 
   except Exception as e:
     st.error(f"Ошибка загрузки: {e}")
