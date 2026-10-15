@@ -136,10 +136,9 @@ def get_user_id(username, headers):
 
 
 def get_recent_clips(broadcaster_id, headers):
-  """Запрос клипов с акцентом на свежие даты, чтобы они не тонули в старых"""
+  """Запрос клипов за последние 7 дней, чтобы свежие клипы не тонули в старых вирусных"""
   url = "https://api.twitch.tv/helix/clips"
-  # Берем клипы за последние 90 дней
-  started_at = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+  started_at = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
   params = {
       "broadcaster_id": broadcaster_id,
@@ -152,8 +151,8 @@ def get_recent_clips(broadcaster_id, headers):
   if res.status_code == 200:
     clips_data = res.json().get("data", [])
 
-  # Если свежих за 90 дней мало, добираем общие, чтобы список не был пустым
-  if len(clips_data) < 20:
+  # Если за последние 7 дней клипов мало, подтягиваем общие за последнее время
+  if len(clips_data) < 10:
     params_fallback = {"broadcaster_id": broadcaster_id, "first": 50}
     res_fb = requests.get(url, headers=headers, params=params_fallback)
     if res_fb.status_code == 200:
@@ -171,7 +170,6 @@ with st.sidebar:
 
   token = ""
   headers = {}
-  suggestions = []
 
   if CLIENT_ID and CLIENT_SECRET:
     try:
@@ -180,13 +178,17 @@ with st.sidebar:
     except:
       pass
 
-  # Интерактивный ввод с автоподбором ников с Twitch
+  # Поле ввода с сохранением состояния подсказок
   search_query = st.text_input(
       "Добавить стримера", placeholder="Введите ник...", label_visibility="collapsed"
   )
 
   if search_query and headers:
-    suggestions = search_twitch_channels(search_query, headers)
+    if "last_query" not in st.session_state or st.session_state["last_query"] != search_query:
+      st.session_state["last_query"] = search_query
+      st.session_state["suggestions"] = search_twitch_channels(search_query, headers)
+
+    suggestions = st.session_state.get("suggestions", [])
     if suggestions:
       selected_suggestion = st.selectbox(
           "Похожие на Twitch:", ["Выберите канал..."] + suggestions
@@ -198,7 +200,7 @@ with st.sidebar:
           save_config(cfg)
           st.rerun()
 
-  if st.button("➕ Добавить вручную"):
+  if st.button("➕ Добавить"):
     if search_query:
       clean_name = search_query.strip().lower()
       if clean_name not in cfg["streamers"]:
@@ -261,7 +263,7 @@ else:
               "thumb": thumb,
           })
 
-    # Принудительная сортировка (новые сверху)
+    # Принудительная сортировка (новые сверху или по просмотрам)
     if sort_option == "Сначала свежие":
       all_clips.sort(key=lambda x: x["date"], reverse=True)
     else:
